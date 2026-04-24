@@ -49,6 +49,69 @@ And in the session:
 
 It inventories the sources, proposes a strategy, waits for your OK, then produces `edit/final.mp4` next to your sources. All outputs live in `<videos_dir>/edit/` — the skill directory stays clean.
 
+## Transcription backend
+
+video-use supports two transcription backends, selected via the `VIDEO_USE_TRANSCRIBER`
+environment variable:
+
+| Value | Backend | Requires |
+|-------|---------|----------|
+| `legacy` (default) | ElevenLabs Scribe v1 API, direct HTTP | `ELEVENLABS_API_KEY` in env or `.env` |
+| `vidparse` | Local Whisper + pyannote + YAMNet via the `vidparse` package | `HF_TOKEN` in env (for pyannote model downloads); `vidparse[rich]` installed |
+
+The on-disk transcript format is identical: both write
+`<edit_dir>/transcripts/<video_stem>.json` in a Scribe envelope shape
+(`{"words": [...]}` with per-word `{type, text, start, end, speaker_id}`).
+
+### Switching backends
+
+```bash
+export VIDEO_USE_TRANSCRIBER=vidparse    # use the local vidparse backend
+export VIDEO_USE_TRANSCRIBER=legacy      # explicit legacy (same as unset)
+unset VIDEO_USE_TRANSCRIBER              # back to default (legacy)
+```
+
+### Phrase-packing threshold (vidparse users)
+
+When running `helpers/pack_transcripts.py` over a transcript produced by the
+`vidparse` backend, pass `--silence-threshold 0.15` to recover editor-usable
+phrase granularity:
+
+```bash
+uv run python helpers/pack_transcripts.py --edit-dir <dir> --silence-threshold 0.15
+```
+
+Whisper (vidparse) emits DTW-aligned word timestamps that pack tight — ~88%
+of word-to-word gaps are under 0.1s — so the default 0.5s silence threshold
+(tuned for ElevenLabs' acoustic-boundary timings) rarely triggers a phrase
+break and produces unusably long multi-paragraph phrases. `0.15s` brings the
+granularity close to legacy output. Legacy users keep the default `0.5s`.
+
+See `tools/parity_harness.py` (`SILENCE_THRESHOLDS` near the top) and the
+2026-04-24 parity report in the vidparse repo for evidence.
+
+### Parity validation
+
+Before flipping to `vidparse` on a new machine or after a `vidparse` version bump,
+run the parity harness to confirm both backends still agree within tolerance:
+
+```bash
+ELEVENLABS_API_KEY=... HF_TOKEN=... uv run python tools/parity_harness.py <fixture_dir>
+```
+
+See `tools/README.md` for details on tolerance gates and failure diagnosis.
+
+### Rollback
+
+If the `vidparse` backend regresses on real edits (drift in EDL decisions, crashes,
+etc.), flip the env var back:
+
+```bash
+export VIDEO_USE_TRANSCRIBER=legacy
+```
+
+No data migration is needed — both backends produce files at the same path.
+
 ## How it works
 
 The LLM never watches the video. It **reads** it — through two layers that together give it everything it needs to cut with word-boundary precision.

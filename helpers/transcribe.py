@@ -26,6 +26,8 @@ from pathlib import Path
 
 import requests
 
+from vidparse import parse as vidparse_parse
+
 
 SCRIBE_URL = "https://api.elevenlabs.io/v1/speech-to-text"
 
@@ -87,7 +89,7 @@ def call_scribe(
     return resp.json()
 
 
-def transcribe_one(
+def _transcribe_one_legacy(
     video: Path,
     edit_dir: Path,
     api_key: str,
@@ -95,7 +97,11 @@ def transcribe_one(
     num_speakers: int | None = None,
     verbose: bool = True,
 ) -> Path:
-    """Transcribe a single video. Returns path to transcript JSON.
+    """Legacy backend: ElevenLabs Scribe API direct.
+
+    Kept as the fallback path during Plan B rollout.
+
+    Transcribe a single video. Returns path to transcript JSON.
 
     Cached: returns existing path immediately if the transcript already exists.
     """
@@ -130,6 +136,122 @@ def transcribe_one(
             print(f"    words: {len(payload['words'])}")
 
     return out_path
+
+
+def _transcribe_one_vidparse(
+    video: Path,
+    edit_dir: Path,
+    api_key: str,
+    language: str | None = None,
+    num_speakers: int | None = None,
+    verbose: bool = True,
+) -> Path:
+    """Vidparse backend: local Whisper + pyannote + YAMNet via vidparse.parse().
+
+    Produces the same on-disk shape as the legacy backend:
+    <edit_dir>/transcripts/<video_stem>.json with a Scribe envelope
+    (top-level key 'words' containing a sorted list of word + audio_event
+    + spacing entries; each with {type, text, start, end, speaker_id}).
+
+    The `api_key` parameter is accepted for signature compatibility with
+    the legacy backend but is unused — vidparse reads HF_TOKEN from the
+    environment for pyannote model downloads.
+
+    Cached: returns existing path immediately if the transcript already exists
+    (same cache semantics as the legacy backend).
+
+    Diarization and audio-event detection are always enabled, matching the
+    legacy ElevenLabs call which hardcodes diarize=true and tag_audio_events=true.
+    """
+    transcripts_dir = edit_dir / "transcripts"
+    transcripts_dir.mkdir(parents=True, exist_ok=True)
+    out_path = transcripts_dir / f"{video.stem}.json"
+
+    if out_path.exists():
+        if verbose:
+            print(f"cached: {out_path.name}")
+        return out_path
+
+    if verbose:
+        print(f"  transcribing {video.name} via vidparse", flush=True)
+
+    # Task 0 probe verified all these kwargs exist on parse(). scribe_json kwarg
+    # dropped: rich=True already forces whisper-turbo with word timestamps, and
+    # result.save(format="scribe") composes the envelope on the save path.
+    result = vidparse_parse(
+        str(video),
+        language=language,
+        rich=True,
+        diarize=True,
+        num_speakers=num_speakers,
+        detect_events=True,
+    )
+
+    # Task 0 probe (2026-04-24) proved save(path=X.json, format="scribe") silently
+    # ignores format= and writes the rich envelope. Only a .scribe.json path produces
+    # the scribe envelope. Write to .scribe.json then atomically rename to .json.
+    tmp_path = out_path.with_suffix(".scribe.json")
+    written = result.save(path=str(tmp_path), format="scribe")
+    tmp_path.replace(out_path)
+
+    if not out_path.exists():
+        raise RuntimeError(
+            f"vidparse backend did not produce expected output at {out_path}. "
+            f"save() returned: {written}"
+        )
+
+    if verbose:
+        kb = out_path.stat().st_size / 1024
+        print(f"  saved: {out_path.name} ({kb:.1f} KB)")
+
+    return out_path
+
+
+_TRANSCRIBER_ENV = "VIDEO_USE_TRANSCRIBER"
+_VALID_BACKENDS = {"legacy", "vidparse"}
+
+
+def _get_backend_name() -> str:
+    """Read VIDEO_USE_TRANSCRIBER, defaulting to 'legacy'. Validates whitelist.
+
+    Raises:
+        ValueError: if env var is set to an unknown value.
+    """
+    name = os.environ.get(_TRANSCRIBER_ENV, "legacy").strip().lower()
+    if name not in _VALID_BACKENDS:
+        raise ValueError(
+            f"{_TRANSCRIBER_ENV}={name!r} is not one of {sorted(_VALID_BACKENDS)}"
+        )
+    return name
+
+
+def transcribe_one(
+    video: Path,
+    edit_dir: Path,
+    api_key: str,
+    language: str | None = None,
+    num_speakers: int | None = None,
+    verbose: bool = True,
+) -> Path:
+    """Dispatch to the configured transcription backend.
+
+    Backend selected by the VIDEO_USE_TRANSCRIBER env var:
+    - 'legacy' (default): ElevenLabs Scribe API direct.
+    - 'vidparse': local Whisper via vidparse.parse() (Plan B).
+
+    Output shape and on-disk path are backend-independent: both write
+    <edit_dir>/transcripts/<video_stem>.json in Scribe-envelope shape.
+    """
+    backend = _get_backend_name()
+    if backend == "vidparse":
+        return _transcribe_one_vidparse(video, edit_dir, api_key,
+                                        language=language,
+                                        num_speakers=num_speakers,
+                                        verbose=verbose)
+    return _transcribe_one_legacy(video, edit_dir, api_key,
+                                  language=language,
+                                  num_speakers=num_speakers,
+                                  verbose=verbose)
 
 
 def main() -> None:
