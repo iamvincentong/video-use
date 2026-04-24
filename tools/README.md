@@ -29,6 +29,20 @@ Tolerance gates are hardcoded near the top of the script:
 - packed-phrase count: within 15% of legacy phrase count, floor 1 for tiny fixtures
 - audio-event count: informational only (legacy emits 0; positive vidparse count just confirms YAMNet fired)
 
+### Phrase-packing thresholds (backend-native)
+
+The harness packs phrases at a backend-appropriate `silence_threshold` — see
+`SILENCE_THRESHOLDS` near the top of the script:
+
+- `legacy`: `0.5s` (ElevenLabs acoustic-boundary timings have natural 0.5s gaps)
+- `vidparse`: `0.15s` (Whisper DTW timings pack tight; 88% of word-to-word
+  gaps are <0.1s, so 0.5s rarely splits and phrases become unusably long)
+
+**Implication for production `pack_transcripts.py`:** when using
+`VIDEO_USE_TRANSCRIBER=vidparse`, invoke `pack_transcripts.py --silence-threshold 0.15`
+to get comparable phrase granularity. The default 0.5s assumes ElevenLabs
+timings and will produce coarse multi-paragraph phrases on Whisper output.
+
 ## `smoke_vidparse_backend.py`
 
 One-off smoke test for the vidparse backend. Runs `transcribe_one` with

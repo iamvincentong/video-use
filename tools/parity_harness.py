@@ -48,6 +48,20 @@ TOLERANCES = {
 }
 
 
+# Backend-native silence thresholds for phrase packing. ElevenLabs emits
+# acoustic-boundary word timestamps with naturally-spaced gaps (0.5s default
+# empirically right). Whisper (vidparse) emits DTW-aligned timestamps that
+# pack tight — 88% of word-to-word gaps are <0.1s on a 2-speaker hearing clip,
+# so 0.5s rarely triggers a split and phrases become unusably long (87-word
+# monologue blocks). 0.15s recovers parity (29 vs legacy's 26 phrases on the
+# same fixture). This is a timing-characteristic difference, not a
+# transcription-quality one.
+SILENCE_THRESHOLDS = {
+    "legacy": 0.5,
+    "vidparse": 0.15,
+}
+
+
 def run_backend(backend: str, audio: Path, edit_dir: Path) -> Path:
     """Run one backend on one audio, return the written JSON path.
 
@@ -80,14 +94,14 @@ def envelope_stats(json_path: Path) -> dict:
     }
 
 
-def packed_phrases(json_path: Path) -> list[str]:
+def packed_phrases(json_path: Path, backend: str) -> list[str]:
     """Run pack_one_file on this transcript, return the packed phrase texts.
 
-    pack_one_file(json_path, silence_threshold) returns
-    (stem, duration, phrases) where phrases is a list of dicts with a 'text'
-    key. We call it in-process with the default silence threshold (0.5s).
+    Threshold is backend-native (see SILENCE_THRESHOLDS): fair comparison is
+    each backend at its usable threshold, not both at the same dial.
     """
-    _stem, _duration, phrases = pack_one_file(json_path, silence_threshold=0.5)
+    threshold = SILENCE_THRESHOLDS[backend]
+    _stem, _duration, phrases = pack_one_file(json_path, silence_threshold=threshold)
     return [p["text"] for p in phrases if p.get("text", "").strip()]
 
 
@@ -104,8 +118,8 @@ def compare_one(audio: Path, tmp: Path) -> dict:
     legacy_stats = envelope_stats(legacy_json)
     vidparse_stats = envelope_stats(vidparse_json)
 
-    legacy_phrases = packed_phrases(legacy_json)
-    vidparse_phrases = packed_phrases(vidparse_json)
+    legacy_phrases = packed_phrases(legacy_json, "legacy")
+    vidparse_phrases = packed_phrases(vidparse_json, "vidparse")
 
     ratio = (
         vidparse_stats["word_count"] / legacy_stats["word_count"]
@@ -179,6 +193,13 @@ def format_report(results: list[dict], passed: bool, failures: list[str]) -> str
     lines.append("")
     for k, v in TOLERANCES.items():
         lines.append(f"- `{k}`: {v}")
+    lines.append("")
+    lines.append("## Phrase-packing thresholds")
+    lines.append("")
+    for k, v in SILENCE_THRESHOLDS.items():
+        lines.append(f"- `{k}`: `silence_threshold={v}s`")
+    lines.append("")
+    lines.append("_Backend-native: ElevenLabs emits acoustic-boundary timings (0.5s gaps work); Whisper emits DTW-aligned timings packed tight, so 0.15s is needed to recover comparable phrase granularity. Same algorithm, different backend timing characteristics._")
     if failures:
         lines.append("")
         lines.append("## Failures")
