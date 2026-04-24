@@ -87,7 +87,7 @@ def call_scribe(
     return resp.json()
 
 
-def transcribe_one(
+def _transcribe_one_legacy(
     video: Path,
     edit_dir: Path,
     api_key: str,
@@ -95,7 +95,11 @@ def transcribe_one(
     num_speakers: int | None = None,
     verbose: bool = True,
 ) -> Path:
-    """Transcribe a single video. Returns path to transcript JSON.
+    """Legacy backend: ElevenLabs Scribe API direct.
+
+    Kept as the fallback path during Plan B rollout.
+
+    Transcribe a single video. Returns path to transcript JSON.
 
     Cached: returns existing path immediately if the transcript already exists.
     """
@@ -130,6 +134,53 @@ def transcribe_one(
             print(f"    words: {len(payload['words'])}")
 
     return out_path
+
+
+_TRANSCRIBER_ENV = "VIDEO_USE_TRANSCRIBER"
+_VALID_BACKENDS = {"legacy", "vidparse"}
+
+
+def _get_backend_name() -> str:
+    """Read VIDEO_USE_TRANSCRIBER, defaulting to 'legacy'. Validates whitelist.
+
+    Raises:
+        ValueError: if env var is set to an unknown value.
+    """
+    name = os.environ.get(_TRANSCRIBER_ENV, "legacy").strip().lower()
+    if name not in _VALID_BACKENDS:
+        raise ValueError(
+            f"{_TRANSCRIBER_ENV}={name!r} is not one of {sorted(_VALID_BACKENDS)}"
+        )
+    return name
+
+
+def transcribe_one(
+    video: Path,
+    edit_dir: Path,
+    api_key: str,
+    language: str | None = None,
+    num_speakers: int | None = None,
+    verbose: bool = True,
+) -> Path:
+    """Dispatch to the configured transcription backend.
+
+    Backend selected by the VIDEO_USE_TRANSCRIBER env var:
+    - 'legacy' (default): ElevenLabs Scribe API direct.
+    - 'vidparse': local Whisper via vidparse.parse() (Plan B).
+
+    Output shape and on-disk path are backend-independent: both write
+    <edit_dir>/transcripts/<video_stem>.json in Scribe-envelope shape.
+    """
+    backend = _get_backend_name()
+    if backend == "vidparse":
+        return _transcribe_one_vidparse(video, edit_dir, api_key,
+                                        language=language,
+                                        num_speakers=num_speakers,
+                                        verbose=verbose)
+    return _transcribe_one_legacy(video, edit_dir, api_key,
+                                  language=language,
+                                  num_speakers=num_speakers,
+                                  verbose=verbose)
 
 
 def main() -> None:
