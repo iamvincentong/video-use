@@ -21,7 +21,7 @@ preferred (matches what `transcribe_one()` expects).
 Exit codes:
 - `0`: all tolerance gates passed
 - `1`: one or more gates failed (report shows which)
-- `2`: usage / argument error
+- `2`: usage / argument error, missing env var, or harness crashed before reaching gate evaluation (exit 1 means a real parity regression; exit 2 means the harness never got to a verdict)
 
 Tolerance gates are hardcoded near the top of the script:
 - word-count ratio (vidparse / legacy) in [0.85, 1.15] — may need to rebase after first real-fixture run; see `TOLERANCES` comments

@@ -65,17 +65,23 @@ SILENCE_THRESHOLDS = {
 def run_backend(backend: str, audio: Path, edit_dir: Path) -> Path:
     """Run one backend on one audio, return the written JSON path.
 
-    Note: mutates process env (VIDEO_USE_TRANSCRIBER) and does not restore.
-    Harness-internal only — if you reuse this helper from a long-lived
-    caller, wrap in try/finally with env restore.
+    Restores VIDEO_USE_TRANSCRIBER on exit (success or failure) so callers
+    that wrap this in loops can rely on a clean env between iterations.
     """
+    prev = os.environ.get("VIDEO_USE_TRANSCRIBER")
     os.environ["VIDEO_USE_TRANSCRIBER"] = backend
-    (edit_dir / "transcripts").mkdir(parents=True, exist_ok=True)
-    transcribe_one(audio, edit_dir, api_key=os.environ.get("ELEVENLABS_API_KEY", ""))
-    out = edit_dir / "transcripts" / (audio.stem + ".json")
-    if not out.exists():
-        raise RuntimeError(f"{backend} did not produce {out}")
-    return out
+    try:
+        (edit_dir / "transcripts").mkdir(parents=True, exist_ok=True)
+        transcribe_one(audio, edit_dir, api_key=os.environ.get("ELEVENLABS_API_KEY", ""))
+        out = edit_dir / "transcripts" / (audio.stem + ".json")
+        if not out.exists():
+            raise RuntimeError(f"{backend} did not produce {out}")
+        return out
+    finally:
+        if prev is None:
+            os.environ.pop("VIDEO_USE_TRANSCRIBER", None)
+        else:
+            os.environ["VIDEO_USE_TRANSCRIBER"] = prev
 
 
 def envelope_stats(json_path: Path) -> dict:
@@ -147,7 +153,12 @@ def evaluate(results: list[dict]) -> tuple[bool, list[str]]:
     """Apply tolerance gates; return (passed, list of failure reasons)."""
     failures = []
     for r in results:
-        if not (TOLERANCES["word_count_ratio_min"] <= r["word_count_ratio"] <= TOLERANCES["word_count_ratio_max"]):
+        if r["legacy"]["word_count"] == 0:
+            failures.append(
+                f"{r['fixture']}: legacy produced 0 words (empty fixture or backend failure); "
+                f"vidparse produced {r['vidparse']['word_count']}"
+            )
+        elif not (TOLERANCES["word_count_ratio_min"] <= r["word_count_ratio"] <= TOLERANCES["word_count_ratio_max"]):
             failures.append(
                 f"{r['fixture']}: word-count ratio {r['word_count_ratio']} outside "
                 f"[{TOLERANCES['word_count_ratio_min']}, {TOLERANCES['word_count_ratio_max']}]"
@@ -235,9 +246,19 @@ def main() -> int:
         print(f"no .wav files in {fixture_dir}", file=sys.stderr)
         return 2
 
-    with tempfile.TemporaryDirectory() as tmp_str:
-        tmp = Path(tmp_str)
-        results = [compare_one(a, tmp) for a in audios]
+    # Separate "crashed before a verdict" (exit 2) from "gates failed" (exit 1)
+    # so CI / operators can distinguish transient harness breakage from real
+    # parity regressions. Gate failures are the only exit-1 signal.
+    try:
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            results = [compare_one(a, tmp) for a in audios]
+    except Exception as e:
+        print(
+            f"harness crashed before gate evaluation: {type(e).__name__}: {e}",
+            file=sys.stderr,
+        )
+        return 2
 
     passed, failures = evaluate(results)
     report = format_report(results, passed, failures)
