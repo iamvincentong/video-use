@@ -212,12 +212,12 @@ _VALID_BACKENDS = {"legacy", "vidparse"}
 
 
 def _get_backend_name() -> str:
-    """Read VIDEO_USE_TRANSCRIBER, defaulting to 'legacy'. Validates whitelist.
+    """Read VIDEO_USE_TRANSCRIBER, defaulting to 'vidparse'. Validates whitelist.
 
     Raises:
         ValueError: if env var is set to an unknown value.
     """
-    name = os.environ.get(_TRANSCRIBER_ENV, "legacy").strip().lower()
+    name = os.environ.get(_TRANSCRIBER_ENV, "vidparse").strip().lower()
     if name not in _VALID_BACKENDS:
         raise ValueError(
             f"{_TRANSCRIBER_ENV}={name!r} is not one of {sorted(_VALID_BACKENDS)}"
@@ -236,8 +236,8 @@ def transcribe_one(
     """Dispatch to the configured transcription backend.
 
     Backend selected by the VIDEO_USE_TRANSCRIBER env var:
-    - 'legacy' (default): ElevenLabs Scribe API direct.
-    - 'vidparse': local Whisper via vidparse.parse() (Plan B).
+    - 'vidparse' (default): local Whisper via vidparse.parse() (Plan B).
+    - 'legacy': ElevenLabs Scribe API direct.
 
     Output shape and on-disk path are backend-independent: both write
     <edit_dir>/transcripts/<video_stem>.json in Scribe-envelope shape.
