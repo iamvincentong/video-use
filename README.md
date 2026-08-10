@@ -56,8 +56,8 @@ environment variable:
 
 | Value | Backend | Requires |
 |-------|---------|----------|
-| `legacy` (default) | ElevenLabs Scribe v1 API, direct HTTP | `ELEVENLABS_API_KEY` in env or `.env` |
-| `vidparse` | Local Whisper + pyannote + YAMNet via the `vidparse` package | `HF_TOKEN` in env (for pyannote model downloads); `vidparse[rich]` installed |
+| `vidparse` (default) | Local Whisper + pyannote + YAMNet via the `vidparse` package | `HF_TOKEN` in env (for pyannote model downloads); `vidparse[rich]` installed |
+| `legacy` | ElevenLabs Scribe v1 API, direct HTTP | `ELEVENLABS_API_KEY` in env or `.env` |
 
 The on-disk transcript format is identical: both write
 `<edit_dir>/transcripts/<video_stem>.json` in a Scribe envelope shape
@@ -66,9 +66,9 @@ The on-disk transcript format is identical: both write
 ### Switching backends
 
 ```bash
-export VIDEO_USE_TRANSCRIBER=vidparse    # use the local vidparse backend
-export VIDEO_USE_TRANSCRIBER=legacy      # explicit legacy (same as unset)
-unset VIDEO_USE_TRANSCRIBER              # back to default (legacy)
+export VIDEO_USE_TRANSCRIBER=legacy      # opt out to ElevenLabs Scribe
+export VIDEO_USE_TRANSCRIBER=vidparse    # explicit vidparse (same as unset)
+unset VIDEO_USE_TRANSCRIBER              # back to default (vidparse)
 ```
 
 ### Phrase-packing threshold (vidparse users)
